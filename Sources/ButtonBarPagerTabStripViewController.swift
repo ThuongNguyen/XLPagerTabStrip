@@ -50,10 +50,14 @@ public struct ButtonBarPagerTabStripSettings {
 
         public var selectedBarBackgroundColor = UIColor.black
         public var selectedBarHeight: CGFloat = 5
+        public var isSetWidth: Bool     = false
+        public var widthItem: CGFloat   = 100
+        public var heightItem: CGFloat  = 100
+
         public var selectedBarVerticalAlignment: SelectedBarVerticalAlignment = .bottom
 
         public var buttonBarItemBackgroundColor: UIColor?
-        public var buttonBarItemFont = UIFont.systemFont(ofSize: 18)
+        public var buttonBarItemFont = UIFont.systemFont(ofSize: 13)
         public var buttonBarItemLeftRightMargin: CGFloat = 8
         public var buttonBarItemTitleColor: UIColor?
         public var buttonBarItemsShouldFillAvailableWidth = true
@@ -71,7 +75,9 @@ open class ButtonBarPagerTabStripViewController: PagerTabStripViewController, Pa
     public var buttonBarItemSpec: ButtonBarItemSpec<ButtonBarViewCell>!
 
     public var changeCurrentIndex: ((_ oldCell: ButtonBarViewCell?, _ newCell: ButtonBarViewCell?, _ animated: Bool) -> Void)?
-    public var changeCurrentIndexProgressive: ((_ oldCell: ButtonBarViewCell?, _ newCell: ButtonBarViewCell?, _ progressPercentage: CGFloat, _ changeCurrentIndex: Bool, _ animated: Bool) -> Void)?
+    
+    public var changeCurrentIndexProgressive: ((_ oldCell: ButtonBarViewCell?, _ newCell: ButtonBarViewCell?, _ progressPercentage: CGFloat, _ changeCurrentIndex: Bool, _ animated: Bool, _ index: Int) -> Void)?
+
 
     @IBOutlet public weak var buttonBarView: ButtonBarView!
 
@@ -242,7 +248,7 @@ open class ButtonBarPagerTabStripViewController: PagerTabStripViewController, Pa
             let newIndexPath = IndexPath(item: currentIndex, section: 0)
 
             let cells = cellForItems(at: [oldIndexPath, newIndexPath], reloadIfNotVisible: collectionViewDidLoad)
-            changeCurrentIndexProgressive(cells.first!, cells.last!, progressPercentage, indexWasChanged, true)
+            changeCurrentIndexProgressive(cells.first!, cells.last!, progressPercentage, indexWasChanged, true, toIndex)
         }
     }
 
@@ -273,12 +279,19 @@ open class ButtonBarPagerTabStripViewController: PagerTabStripViewController, Pa
         guard let cellWidthValue = cachedCellWidths?[indexPath.row] else {
             fatalError("cachedCellWidths for \(indexPath.row) must not be nil")
         }
-        return CGSize(width: cellWidthValue, height: collectionView.frame.size.height)
+        
+        if self.settings.style.isSetWidth { 
+            return CGSize(width: self.settings.style.widthItem, height: self.settings.style.heightItem)
+        } else {
+            return CGSize(width: cellWidthValue, height: collectionView.frame.size.height)
+        }
+
     }
 
     open func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         guard indexPath.item != currentIndex else { return }
 
+        buttonBarView.backgroundColor = settings.style.buttonBarBackgroundColor ?? buttonBarView.backgroundColor        
         buttonBarView.moveTo(index: indexPath.item, animated: true, swipeDirection: .none, pagerScroll: .yes)
         shouldUpdateButtonBarView = false
 
@@ -289,7 +302,7 @@ open class ButtonBarPagerTabStripViewController: PagerTabStripViewController, Pa
 
         if pagerBehaviour.isProgressiveIndicator {
             if let changeCurrentIndexProgressive = changeCurrentIndexProgressive {
-                changeCurrentIndexProgressive(cells.first!, cells.last!, 1, true, true)
+                changeCurrentIndexProgressive(cells.first!, cells.last!, 1, true, true, indexPath.item)
             }
         } else {
             if let changeCurrentIndex = changeCurrentIndex {
@@ -331,7 +344,7 @@ open class ButtonBarPagerTabStripViewController: PagerTabStripViewController, Pa
 
         if pagerBehaviour.isProgressiveIndicator {
             if let changeCurrentIndexProgressive = changeCurrentIndexProgressive {
-                changeCurrentIndexProgressive(currentIndex == indexPath.item ? nil : cell, currentIndex == indexPath.item ? cell : nil, 1, true, false)
+                changeCurrentIndexProgressive(currentIndex == indexPath.item ? nil : cell, currentIndex == indexPath.item ? cell : nil, 1, true, false, indexPath.item)
             }
         } else {
             if let changeCurrentIndex = changeCurrentIndex {
@@ -363,41 +376,48 @@ open class ButtonBarPagerTabStripViewController: PagerTabStripViewController, Pa
         var minimumCellWidths = [CGFloat]()
         var collectionViewContentWidth: CGFloat = 0
 
-        for viewController in viewControllers {
-            let childController = viewController as! IndicatorInfoProvider // swiftlint:disable:this force_cast
-            let indicatorInfo = childController.indicatorInfo(for: self)
-            switch buttonBarItemSpec! {
-            case .cellClass(let widthCallback):
-                let width = widthCallback(indicatorInfo)
-                minimumCellWidths.append(width)
-                collectionViewContentWidth += width
-            case .nibFile(_, _, let widthCallback):
-                let width = widthCallback(indicatorInfo)
-                minimumCellWidths.append(width)
-                collectionViewContentWidth += width
+        if settings.style.isSetWidth {
+                    var stretchedCellWidths = [CGFloat]()
+                    for _ in viewControllers {
+                     stretchedCellWidths.append(self.settings.style.widthItem)
+                    }
+                    return stretchedCellWidths
+                } else {
+                    for viewController in viewControllers {
+                        let childController = viewController as! IndicatorInfoProvider // swiftlint:disable:this force_cast
+                        let indicatorInfo = childController.indicatorInfo(for: self)
+                        switch buttonBarItemSpec! {
+                        case .cellClass(let widthCallback):
+                            let width = widthCallback(indicatorInfo)
+                            minimumCellWidths.append(width)
+                            collectionViewContentWidth += width
+                        case .nibFile(_, _, let widthCallback):
+                            let width = widthCallback(indicatorInfo)
+                            minimumCellWidths.append(width)
+                            collectionViewContentWidth += width
+                        }
+                    }
+                    
+                    let cellSpacingTotal = CGFloat(numberOfCells - 1) * flowLayout.minimumLineSpacing
+                    collectionViewContentWidth += cellSpacingTotal
+                    
+                    let collectionViewAvailableVisibleWidth = buttonBarView.frame.size.width - flowLayout.sectionInset.left - flowLayout.sectionInset.right
+                    
+                    if !settings.style.buttonBarItemsShouldFillAvailableWidth || collectionViewAvailableVisibleWidth < collectionViewContentWidth {
+                        return minimumCellWidths
+                    } else {
+                        let stretchedCellWidthIfAllEqual = (collectionViewAvailableVisibleWidth - cellSpacingTotal) / CGFloat(numberOfCells)
+                        let generalMinimumCellWidth = calculateStretchedCellWidths(minimumCellWidths, suggestedStretchedCellWidth: stretchedCellWidthIfAllEqual, previousNumberOfLargeCells: 0)
+                        var stretchedCellWidths = [CGFloat]()
+                        
+                        for minimumCellWidthValue in minimumCellWidths {
+                            let cellWidth = (minimumCellWidthValue > generalMinimumCellWidth) ? minimumCellWidthValue : generalMinimumCellWidth
+                            stretchedCellWidths.append(cellWidth)
+                        }
+                        return stretchedCellWidths
+                    } 
+                }
             }
-        }
-
-        let cellSpacingTotal = CGFloat(numberOfCells - 1) * flowLayout.minimumLineSpacing
-        collectionViewContentWidth += cellSpacingTotal
-
-        let collectionViewAvailableVisibleWidth = buttonBarView.frame.size.width - flowLayout.sectionInset.left - flowLayout.sectionInset.right
-
-        if !settings.style.buttonBarItemsShouldFillAvailableWidth || collectionViewAvailableVisibleWidth < collectionViewContentWidth {
-            return minimumCellWidths
-        } else {
-            let stretchedCellWidthIfAllEqual = (collectionViewAvailableVisibleWidth - cellSpacingTotal) / CGFloat(numberOfCells)
-            let generalMinimumCellWidth = calculateStretchedCellWidths(minimumCellWidths, suggestedStretchedCellWidth: stretchedCellWidthIfAllEqual, previousNumberOfLargeCells: 0)
-            var stretchedCellWidths = [CGFloat]()
-
-            for minimumCellWidthValue in minimumCellWidths {
-                let cellWidth = (minimumCellWidthValue > generalMinimumCellWidth) ? minimumCellWidthValue : generalMinimumCellWidth
-                stretchedCellWidths.append(cellWidth)
-            }
-
-            return stretchedCellWidths
-        }
-    }
 
     private var shouldUpdateButtonBarView = true
     private var collectionViewDidLoad = false
